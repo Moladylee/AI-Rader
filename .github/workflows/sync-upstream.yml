@@ -30,7 +30,7 @@ jobs:
       - name: Create a New Branch with Upstream Code
         run: |
           # 基于上游最新代码创建一个全新的临时分支
-          git checkout -b sync/upstream-$(date +%s) upstream/main --no-track
+          git checkout -b sync/upstream-$(date +%s) upstream/master --no-track
           echo "已基于上游代码创建分支: $(git branch --show-current)"
 
       - name: Restore Your Protected Files
