@@ -2,7 +2,7 @@ name: 'Sync Upstream Template'
 on:
   workflow_dispatch:
   schedule:
-    - cron: '0 12 * * *'
+    - cron: '0 3 * * 1'
 
 # === 新增：全局环境变量，用PAT覆盖默认令牌 ===
 env:
@@ -28,7 +28,7 @@ jobs:
         with:
           source_repo: sansan0/TrendRadar
           source_repo_path: /
-          upstream_branch: master   # 请确认
+          upstream_branch: main   # 请确认
           target_branch: master   # 请确认
           # 此处仍可使用 PAT_TOKEN，但上方的全局覆盖已确保所有调用都使用它
           github_token: ${{ secrets.PAT_TOKEN }}
@@ -37,16 +37,3 @@ jobs:
           excluded_files: |
             config.yaml
             frequency_words.txt
-          # ========== 核心配置：排除需要保护的文件 ==========
-          excluded_files: |
-            config.yaml
-            frequency_words.txt
-            # 您可以继续添加其他需要保护的文件，每行一个
-            # README.md
-            # data/custom_data.json
-            
-          # 可选：配置同步行为
-          # 如果为true，会在同步前对目标分支进行硬重置，慎用
-          hard_reset: false
-          # 强制推送（通常不需要）
-          force_push: false
