@@ -26,7 +26,7 @@ jobs:
           # 拉取所有提交历史（默认只拉取最新1条，合并时需要完整历史）
           fetch-depth: 0
           # 若使用默认GITHUB_TOKEN，推送时会触发CI但权限足够；若有特殊需求可替换为PAT
-          token: ${{ secrets.GITHUB_TOKEN }}
+          token: ${{ secrets.PAT_TOKEN }}
 
       # 步骤2：配置Git用户信息（必须，否则无法提交代码）
       - name: Configure Git user
