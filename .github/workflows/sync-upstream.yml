@@ -90,4 +90,4 @@ jobs:
           labels: automated-pr, upstream-sync
           delete-branch: true
           # 如果没有任何文件变更，则跳过创建PR（静默成功）
-          skip-if-empty: true
+         # skip-if-empty: true
