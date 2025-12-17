@@ -15,7 +15,7 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - name: Sync from TrendRadar template
-        uses: AndreasAugustin/actions-template-sync@v1
+        uses: AndreasAugustin/actions-template-sync@v0.8.0
         with:
           # 上游仓库地址（sansan0/TrendRadar）
           source_repo: sansan0/TrendRadar
