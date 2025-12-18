@@ -1,79 +1,42 @@
 name: Sync Upstream via PR
 on:
-  workflow_dispatch: # 允许手动触发
+  workflow_dispatch:
   schedule:
-    - cron: '0 3 * * 1' # 每周一UTC时间3点（北京时间上午11点）自动运行
+    - cron: '0 3 * * 1' # 每周一 UTC 3点自动检查
 
 permissions:
   contents: write
   pull-requests: write
 
 jobs:
-  sync-upstream:
+  create-pr:
     runs-on: ubuntu-latest
     steps:
-      # 1. 检出您自己的仓库
       - name: Checkout Your Repository
         uses: actions/checkout@v4
         with:
+          # 仅拉取您自己仓库的代码
           fetch-depth: 0
 
-      # 2. 配置Git身份
-      - name: Setup Git
+      - name: Restore Protected Files (Prepare)
+        # 先备份您要保护的文件！这是关键。
         run: |
-          git config --global user.name "github-actions[bot]"
-          git config --global user.email "github-actions[bot]@users.noreply.github.com"
+          mkdir -p /tmp/protected_files_backup
+          cp -f ./config.yaml /tmp/protected_files_backup/ 2>/dev/null || echo "config.yaml not found in base."
+          cp -f ./frequency_words.txt /tmp/protected_files_backup/ 2>/dev/null || echo "frequency_words.txt not found in base."
 
-      # 3. 添加上游仓库并拉取更新
-      - name: Add and Fetch Upstream
-        run: |
-          git remote add upstream https://github.com/sansan0/TrendRadar.git 2>/dev/null || true
-          git fetch upstream --force
-          echo "✅ 已拉取上游仓库 (sansan0/TrendRadar) 的更新。"
-
-      # 4. 基于上游的 master 分支创建同步分支
-      - name: Create Branch from Upstream Master
-        id: create-branch
-        run: |
-          # 确认上游 master 分支存在
-          if ! git show-ref --verify --quiet refs/remotes/upstream/master; then
-            echo "❌ 错误：上游仓库中未找到 'master' 分支。"
-            exit 1
-          fi
-          # 创建唯一的同步分支名
-          SYNC_BRANCH="sync/upstream-$(date +%Y%m%d-%H%M%S)"
-          git checkout -b "$SYNC_BRANCH" upstream/master --no-track
-          echo "✅ 已创建同步分支: $SYNC_BRANCH"
-          # 将分支名设置为输出，供后续步骤使用
-          echo "branch-name=$SYNC_BRANCH" >> $GITHUB_OUTPUT
-
-      # 5. 恢复您需要保护的文件 (从您自己仓库的【主分支】)
-      - name: Restore Protected Files
-        run: |
-          # 【重要】请将 `master` 改为您自己 AI-Rader 仓库的主分支名 (可能是 main)
-          YOUR_BASE_BRANCH="master"
-          echo "正在从 origin/$YOUR_BASE_BRANCH 恢复受保护文件..."
-          # 尝试恢复文件，如果文件不存在则忽略
-          if git checkout "origin/$YOUR_BASE_BRANCH" -- config.yaml 2>/dev/null; then
-            echo "  已恢复 config.yaml"
-          fi
-          if git checkout "origin/$YOUR_BASE_BRANCH" -- frequency_words.txt 2>/dev/null; then
-            echo "  已恢复 frequency_words.txt"
-          fi
-          # 如果有文件被更改，则提交
-          if ! git diff --staged --quiet && git add config.yaml frequency_words.txt; then
-            git commit -m "chore(sync): restore protected files from origin/$YOUR_BASE_BRANCH"
-            echo "✅ 已提交文件恢复。"
-          else
-            echo "ℹ️  受保护文件无更改，无需提交。"
-          fi
-
-      # 6. 创建 Pull Request
-      - name: Create Pull Request
+      - name: Create Pull Request with Upstream Updates
         uses: peter-evans/create-pull-request@v5
+        id: pr
         with:
           token: ${{ secrets.GITHUB_TOKEN }}
-          commit-message: "chore: sync updates from upstream TrendRadar"
+          # 【重要】指定上游仓库作为额外的远程仓库来拉取更新
+          repository: Moladylee/AI-Rader # 您自己的仓库
+          upstream-repository: sansan0/TrendRadar # 上游仓库
+          upstream-branch: master # 上游仓库的分支名
+          # 创建PR的分支设置
+          branch: auto-sync/trendradar # 用于PR的固定分支名，自动创建
+          base: master # PR的目标分支（您仓库的主分支）
           title: "🔄 自动同步：上游 TrendRadar 更新 [$(date +%Y-%m-%d)]"
           body: |
             此 PR 由 GitHub Actions 自动创建，包含来自上游仓库 [sansan0/TrendRadar](https://github.com/sansan0/TrendRadar) 的更新。
@@ -83,11 +46,32 @@ jobs:
             - `frequency_words.txt`
 
             请检查其他文件的变更，确认无误后合并。
-          # 源分支：使用上一步创建的分支
-          branch: ${{ steps.create-branch.outputs.branch-name }}
-          # 【重要】目标分支：必须改为您 AI-Rader 仓库的主分支名
-          base: master
+          commit-message: "chore: sync updates from upstream TrendRadar"
           labels: automated-pr, upstream-sync
-          delete-branch: true
-          # 如果没有任何文件变更，则跳过创建PR（静默成功）
-         # skip-if-empty: true
+          delete-branch: true # 合并后删除临时分支
+          # 这个开关确保即使上游无更新，工作流也成功（不创建空PR）
+          skip-no-changes: true
+
+      - name: Restore Protected Files (Final)
+        # 在 PR 分支创建后，覆盖掉来自上游的配置文件。
+        if: steps.pr.outputs.pull-request-operation == 'created'
+        run: |
+          echo "正在恢复受保护的文件..."
+          # 切换到Action刚刚创建的PR分支
+          git fetch origin
+          git checkout auto-sync/trendradar
+          # 用我们最初备份的版本覆盖文件
+          cp -f /tmp/protected_files_backup/config.yaml ./ 2>/dev/null || echo "No config.yaml backup to restore."
+          cp -f /tmp/protected_files_backup/frequency_words.txt ./ 2>/dev/null || echo "No frequency_words.txt backup to restore."
+          # 提交更改
+          git config --global user.name "github-actions[bot]"
+          git config --global user.email "github-actions[bot]@users.noreply.github.com"
+          git add config.yaml frequency_words.txt
+          # 只有当文件实际有变化时才提交
+          if ! git diff --cached --quiet; then
+            git commit -m "chore: restore protected config files from base branch"
+            git push
+            echo "✅ 受保护文件已恢复并推送。"
+          else
+            echo "ℹ️ 受保护文件无变化，无需提交。"
+          fi
