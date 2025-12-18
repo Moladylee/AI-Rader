@@ -51,7 +51,7 @@ jobs:
         with:
           token: ${{ secrets.GITHUB_TOKEN }}
           commit-message: "chore: sync updates from upstream TrendRadar"
-          title: "🔄 自动同步：上游 TrendRadar 更新 [$(date +%Y-%m-%d)]"
+          title: "🔄 自动同步：上游 TrendRadar 更新 [${{ env.date }}]"
           body: |
             此 PR 包含来自上游仓库 [sansan0/TrendRadar](https://github.com/sansan0/TrendRadar) 的更新。
             **以下文件已受保护，保持您本地的版本：**
