@@ -7,8 +7,6 @@
 数据流程：下载当天 SQLite → 合并新数据 → 上传回远程
 """
 
-import atexit
-import os
 import pytz
 import re
 import shutil
@@ -17,7 +15,7 @@ import tempfile
 import sqlite3
 from datetime import datetime, timedelta
 from pathlib import Path
-from typing import Dict, List, Optional, Any
+from typing import Dict, List, Optional
 
 try:
     import boto3
@@ -36,6 +34,7 @@ from trendradar.utils.time import (
     format_date_folder,
     format_time_filename,
 )
+from trendradar.utils.url import normalize_url
 
 
 class RemoteStorageBackend(StorageBackend):
@@ -94,10 +93,10 @@ class RemoteStorageBackend(StorageBackend):
         # 初始化 S3 客户端
         # 使用 virtual-hosted style addressing（主流）
         # 根据服务商选择签名版本：
-        # - Cloudflare R2 只支持 SigV4
-        # - 腾讯云 COS 等使用 SigV2 以避免 chunked encoding 问题
-        is_cloudflare_r2 = "r2.cloudflarestorage.com" in endpoint_url.lower()
-        signature_version = 's3v4' if is_cloudflare_r2 else 's3'
+        # - 腾讯云 COS 使用 SigV2 以避免 chunked encoding 问题
+        # - 其他服务商（AWS S3、Cloudflare R2、阿里云 OSS、MinIO 等）默认使用 SigV4
+        is_tencent_cos = "myqcloud.com" in endpoint_url.lower()
+        signature_version = 's3' if is_tencent_cos else 's3v4'
 
         s3_config = BotoConfig(
             s3={"addressing_style": "virtual"},
@@ -257,7 +256,7 @@ class RemoteStorageBackend(StorageBackend):
                 Key=r2_key,
                 Body=file_content,
                 ContentLength=local_size,
-                ContentType='application/octet-stream',
+                ContentType='application/x-sqlite3',
             )
             print(f"[远程存储] 已上传: {local_path} -> {r2_key}")
 
@@ -357,12 +356,15 @@ class RemoteStorageBackend(StorageBackend):
 
                 for item in news_list:
                     try:
-                        # 检查是否已存在（通过 URL + platform_id）
-                        if item.url:
+                        # 标准化 URL（去除动态参数，如微博的 band_rank）
+                        normalized_url = normalize_url(item.url, source_id) if item.url else ""
+
+                        # 检查是否已存在（通过标准化 URL + platform_id）
+                        if normalized_url:
                             cursor.execute("""
                                 SELECT id, title FROM news_items
                                 WHERE url = ? AND platform_id = ?
-                            """, (item.url, source_id))
+                            """, (normalized_url, source_id))
                             existing = cursor.fetchone()
 
                             if existing:
@@ -400,14 +402,14 @@ class RemoteStorageBackend(StorageBackend):
                                       data.crawl_time, now_str, existing_id))
                                 updated_count += 1
                             else:
-                                # 不存在，插入新记录
+                                # 不存在，插入新记录（存储标准化后的 URL）
                                 cursor.execute("""
                                     INSERT INTO news_items
                                     (title, platform_id, rank, url, mobile_url,
                                      first_crawl_time, last_crawl_time, crawl_count,
                                      created_at, updated_at)
                                     VALUES (?, ?, ?, ?, ?, ?, ?, 1, ?, ?)
-                                """, (item.title, source_id, item.rank, item.url,
+                                """, (item.title, source_id, item.rank, normalized_url,
                                       item.mobile_url, data.crawl_time, data.crawl_time,
                                       now_str, now_str))
                                 new_id = cursor.lastrowid
@@ -426,7 +428,7 @@ class RemoteStorageBackend(StorageBackend):
                                  first_crawl_time, last_crawl_time, crawl_count,
                                  created_at, updated_at)
                                 VALUES (?, ?, ?, ?, ?, ?, ?, 1, ?, ?)
-                            """, (item.title, source_id, item.rank, item.url,
+                            """, (item.title, source_id, item.rank, "",
                                   item.mobile_url, data.crawl_time, data.crawl_time,
                                   now_str, now_str))
                             new_id = cursor.lastrowid
@@ -695,7 +697,12 @@ class RemoteStorageBackend(StorageBackend):
             return None
 
     def detect_new_titles(self, current_data: NewsData) -> Dict[str, Dict]:
-        """检测新增的标题"""
+        """
+        检测新增的标题
+
+        该方法比较当前抓取数据与历史数据，找出新增的标题。
+        关键逻辑：只有在历史批次中从未出现过的标题才算新增。
+        """
         try:
             historical_data = self.get_today_all_data(current_data.date)
 
@@ -705,9 +712,24 @@ class RemoteStorageBackend(StorageBackend):
                     new_titles[source_id] = {item.title: item for item in news_list}
                 return new_titles
 
+            # 获取当前批次时间
+            current_time = current_data.crawl_time
+
+            # 收集历史标题（first_time < current_time 的标题）
+            # 这样可以正确处理同一标题因 URL 变化而产生多条记录的情况
             historical_titles: Dict[str, set] = {}
             for source_id, news_list in historical_data.items.items():
-                historical_titles[source_id] = {item.title for item in news_list}
+                historical_titles[source_id] = set()
+                for item in news_list:
+                    first_time = getattr(item, 'first_time', item.crawl_time)
+                    if first_time < current_time:
+                        historical_titles[source_id].add(item.title)
+
+            # 检查是否有历史数据
+            has_historical_data = any(len(titles) > 0 for titles in historical_titles.values())
+            if not has_historical_data:
+                # 第一次抓取，没有"新增"概念
+                return {}
 
             new_titles = {}
             for source_id, news_list in current_data.items.items():
